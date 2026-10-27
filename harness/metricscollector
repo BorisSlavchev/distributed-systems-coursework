@@ -1,0 +1,21 @@
+import json
+
+class MetricsCollector:
+    def __init__(self):
+        self.output_dir = "./output"
+        pass
+
+    def generate_ops(self):
+        pass
+
+    def generate_iterations(self):
+        pass
+
+    def generate_convergence(self):
+        pass
+
+    def generate_events(self):
+        pass
+
+    def generate_summary(self):
+        pass
