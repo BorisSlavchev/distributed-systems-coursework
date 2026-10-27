@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Parameter Server — Developer Quick Reference</title>
+<style>
+@page { size: A4; margin: 12mm 14mm; }
+body { font-family: "DejaVu Sans", sans-serif; font-size: 9pt; line-height: 1.12; color: #182536; }
+h1 { font-family: "DejaVu Sans", sans-serif; font-size: 18pt; line-height: 1.1; margin: 0 0 5pt; color: #173d68; }
+h2 { font-family: "DejaVu Sans", sans-serif; font-size: 11pt; margin: 8pt 0 4pt; color: #173d68; }
+p, li, td, th { font-family: "DejaVu Sans", sans-serif; font-size: 9pt; line-height: 1.12; margin: 2pt 0; }
+.subtitle { color: #526376; font-size: 9pt; margin-bottom: 8pt; }
+table { border-collapse: collapse; width: 100%; margin: 4pt 0; font-size: 9pt; }
+th { background: #e9eff6; color: #173d68; text-align: left; }
+th, td { border: 1px solid #ccd6e1; padding: 2pt 4pt; vertical-align: top; }
+code, pre { font-family: "DejaVu Sans Mono", monospace; font-size: 7.5pt; }
+pre { background: #f0f3f7; padding: 6pt; margin: 5pt 0; line-height: 1.12; white-space: pre-wrap; }
+ul { margin: 3pt 0; padding-left: 14pt; }
+li { margin-bottom: 2pt; }
+.small { font-size: 8.5pt; color: #526376; }
+.page-two { page-break-before: always; }
+</style>
+</head>
+<body>
+<h1>Parameter Server</h1>
+<p class="subtitle">Developer quick reference · Single-node baseline · Python 3.14.4</p>
+<p><strong>Harness contract:</strong> use the public Python client. One real server communicates over gRPC; there are no REST endpoints or distributed consistency modes.</p>
+
+<h2>1. Connect and submit work</h2>
+<p>Import <code>Client</code> and <code>KeyRange</code> from <code>parameter_server</code>. Use an asyncio coroutine. <code>push</code> and <code>pull</code> copy inputs and return handles without awaiting network acknowledgement.</p>
+
+<table width="100%" cellpadding="2" cellspacing="0">
+<tr><th>Client / handle operation</th><th>Purpose</th></tr>
+<tr><td><code>await Client.connect(address, worker_id, **options)</code></td><td>Create a connected client.</td></tr>
+<tr><td><code>client.push(target, values, deps=(), iteration=0)</code></td><td>Schedule numeric updates; returns <code>Task</code>.</td></tr>
+<tr><td><code>client.pull(target, deps=(), iteration=0)</code></td><td>Schedule a snapshot; returns <code>Task</code>.</td></tr>
+<tr><td><code>await task.wait(timeout_ms=None)</code></td><td>Return <code>Ack</code> for push or <code>Values</code> for pull.</td></tr>
+<tr><td><code>task.done()</code> / <code>task.task_id</code></td><td>Local terminal-state check / operation identifier.</td></tr>
+<tr><td><code>await client.close()</code></td><td>Close local activity; accepted server work is not rolled back.</td></tr>
+</table>
+
+<h2>2. Connection options and public attributes</h2>
+<table width="100%" cellpadding="2" cellspacing="0">
+<tr><th>Option</th><th>Default / meaning</th></tr>
+<tr><td><code>server_address</code>, <code>worker_id</code></td><td>Required: <code>host:port</code> and unsigned 32-bit worker ID.</td></tr>
+<tr><td><code>sequence_start</code></td><td><code>0</code>; first unsigned 64-bit task sequence number.</td></tr>
+<tr><td><code>connect_timeout_ms</code></td><td><code>5000</code>; positive connection RPC timeout.</td></tr>
+<tr><td><code>submission_timeout_ms</code></td><td><code>5000</code>; positive registration RPC timeout.</td></tr>
+<tr><td><code>max_message_bytes</code></td><td><code>67108864</code> (64 MiB), send and receive.</td></tr>
+</table>
+<p>Public attributes: <code>client.worker_id</code>, <code>client.next_sequence_number</code>, and <code>client.server_info</code>. Treat the worker ID as fixed. Reconnect with a new worker ID or a sequence above every previously issued ID, including uncertain requests.</p>
+
+<h2>3. Targets, values, and ordering</h2>
+<ul>
+<li><strong>Targets:</strong> <code>[2, 7, 19]</code> must be sorted and unique. <code>KeyRange(2, 5)</code> selects 2, 3, 4. Empty targets are valid.</li>
+<li><strong>Key space:</strong> <code>0</code> to <code>2**64 - 1</code>. Select the last key with a sparse list or <code>KeyRange(2**64 - 1, 2**64)</code>.</li>
+<li><strong>Updates:</strong> finite, flat, key-major numbers; length = key count × width. SGD applies <code>weights -= learning_rate * updates</code>.</li>
+<li><strong>Results:</strong> <code>Values.keys</code> is an ascending tuple; <code>Values.data</code> is a local float64 array; <code>Values.width</code> is vector width. Reshape with <code>data.reshape(len(keys), width)</code>. <code>Ack.task_id</code> identifies a push; <code>TaskId</code> contains <code>worker_id</code> and <code>sequence_number</code>.</li>
+<li><strong>Dependencies:</strong> earlier handles from this same client. The server waits for success; failed prerequisites prevent dependent execution. <code>iteration</code> is unsigned 64-bit metadata only.</li>
+<li><strong>Waits:</strong> a local wait timeout does not cancel work; wait again. Repeated waits reuse the result or terminal error. Wait for required results before closing.</li>
+</ul>
+
+<h2>4. Startup and custom rules</h2>
+<pre>python -m parameter_server --config config/server.json --log-level INFO</pre>
+<p>Log levels: <code>DEBUG</code>, <code>INFO</code> (default), <code>WARNING</code>, <code>ERROR</code>. Programmatic startup: <code>await start_server(config)</code> from <code>parameter_server.server</code>; returned server exposes <code>.port</code> and async <code>.close()</code>.</p>
+<p>Before startup, call <code>register_update_rule(name, function)</code> from <code>parameter_server.rules</code>. Signature: <code>function(weights, updates, parameters) → weights</code>; arrays have shape <code>(key_count, width)</code>. Built-ins: <code>sgd</code> with <code>learning_rate=0.1</code>; <code>add</code> with <code>scale=1.0</code>. Rule failures leave storage unchanged.</p>
+
+<h1 class="page-two">Server &amp; Protocol Reference</h1>
+<p class="subtitle">Configuration, RPCs, extension points, and errors</p>
+
+<h2>5. Server configuration</h2>
+<p>Use JSON via <code>--config</code> or instantiate <code>ServerConfig</code> from <code>parameter_server.config</code>.</p>
+<table width="100%" cellpadding="2" cellspacing="0">
+<tr><th>Variable</th><th>Default</th><th>Meaning</th></tr>
+<tr><td><code>address</code></td><td><code>127.0.0.1:50051</code></td><td>Server bind address.</td></tr>
+<tr><td><code>width</code></td><td><code>1</code></td><td>Fixed vector width, at least 1.</td></tr>
+<tr><td><code>initial_value</code></td><td><code>0.0</code></td><td>Finite scalar for unstored vectors.</td></tr>
+<tr><td><code>update_rule</code></td><td><code>sgd</code></td><td>Registered rule name.</td></tr>
+<tr><td><code>rule_parameters</code></td><td><code>{}</code></td><td>Named finite numeric parameters.</td></tr>
+<tr><td><code>max_keys_per_request</code></td><td><code>1000000</code></td><td>Also constrained by snapshot size.</td></tr>
+<tr><td><code>max_message_bytes</code></td><td><code>67108864</code></td><td>gRPC send/receive limit.</td></tr>
+</table>
+<p><strong>Demo configuration:</strong> <code>config/server.json</code> uses bind address <code>0.0.0.0:50051</code>, width 2, initial value 10, and learning rate 0.1. Clients use <code>127.0.0.1:50051</code> on the host or <code>server:50051</code> inside Compose.</p>
+<p><code>client.server_info</code> exposes width, initial value, request limits, and rule name—not rule parameters. The harness must retain its configured learning rate to calculate expected results.</p>
+
+<h2>6. gRPC endpoints</h2>
+<p>All RPC paths use this service prefix:</p>
+<pre>/parameter_server.v1.ParameterServer/</pre>
+<table width="100%" cellpadding="2" cellspacing="0">
+<tr><th>RPC</th><th>Request → response</th><th>Behaviour</th></tr>
+<tr><td><code>SubmitPush</code></td><td><code>PushRequest → Ack</code></td><td>Register an update, not completion.</td></tr>
+<tr><td><code>SubmitPull</code></td><td><code>PullRequest → Ack</code></td><td>Register a snapshot task.</td></tr>
+<tr><td><code>WaitTask</code></td><td><code>TaskId → TaskResult</code></td><td>Wait for a terminal outcome.</td></tr>
+<tr><td><code>GetTaskStatus</code></td><td><code>TaskId → TaskStatus</code></td><td>Read current state and terminal error.</td></tr>
+<tr><td><code>GetServerInfo</code></td><td><code>Empty → ServerInfo</code></td><td>Read server settings.</td></tr>
+</table>
+<p><strong>Request fields:</strong> <code>task_id</code>, <code>target</code>, <code>dependencies</code>, <code>iteration</code>; push also has <code>values</code>. <strong>States:</strong> <code>PENDING → RUNNING → SUCCEEDED / FAILED</code>. <code>TaskResult</code> carries an <code>ack</code>, <code>values</code>, or <code>error</code>.</p>
+<p>Identical task-ID retries reuse the original task; conflicting contents fail. Raw dependencies must already be registered and belong to the same worker. Wire-level details are in <code>parameter_server/proto/parameter_server.proto</code>.</p>
+
+<h2>7. Errors</h2>
+<p>Import from <code>parameter_server</code>. All inherit <code>ParameterServerError</code> and expose <code>.code</code>.</p>
+<table width="100%" cellpadding="2" cellspacing="0">
+<tr><th>Python exception</th><th>Code / cause</th></tr>
+<tr><td><code>InvalidArgumentError</code></td><td><code>INVALID_ARGUMENT (1)</code>: validation, limits, or conflicting ID.</td></tr>
+<tr><td><code>UnavailableError</code></td><td><code>UNAVAILABLE (2)</code>: server/transport unavailable or client closed.</td></tr>
+<tr><td><code>TaskTimeoutError</code></td><td><code>TIMEOUT (3)</code>: local wait or RPC deadline expired.</td></tr>
+<tr><td><code>DependencyFailedError</code></td><td><code>DEPENDENCY_FAILED (4)</code>: prerequisite failed.</td></tr>
+<tr><td><code>InternalError</code></td><td><code>INTERNAL (5)</code>: execution/rule or unexpected transport failure.</td></tr>
+</table>
+<p>A local wait timeout is retryable by waiting again. A submission deadline is a terminal handle error with a potentially uncertain server outcome. Execution failures arrive through <code>TaskResult</code>; the client translates them to Python exceptions.</p>
+
+<p class="small">Scope: in-memory, single server, plaintext gRPC. State and deduplication last only for the current server process; retained task history grows with workload. No manager, replication, vector clocks, or consistency modes.</p>
+</body>
+</html>

@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package parameter_server.v1;
+
+message TaskId {
+  uint32 worker_id = 1;
+  uint64 sequence_number = 2;
+}
+
+message KeyList { repeated uint64 keys = 1; }
+message KeyRange {
+  uint64 start = 1;
+  uint64 end = 2;
+  bool end_at_keyspace_limit = 3;
+}
+message Target {
+  oneof selection {
+    KeyList sparse = 1;
+    KeyRange range = 2;
+  }
+}
+message PushRequest {
+  TaskId task_id = 1;
+  Target target = 2;
+  repeated double values = 3;
+  repeated TaskId dependencies = 4;
+  uint64 iteration = 5;
+}
+message PullRequest {
+  TaskId task_id = 1;
+  Target target = 2;
+  repeated TaskId dependencies = 3;
+  uint64 iteration = 4;
+}
+message Ack { TaskId task_id = 1; }
+message Values {
+  repeated uint64 keys = 1;
+  repeated double data = 2;
+  uint32 width = 3;
+}
+enum TaskState {
+  TASK_STATE_UNSPECIFIED = 0;
+  PENDING = 1;
+  RUNNING = 2;
+  SUCCEEDED = 3;
+  FAILED = 4;
+}
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  INVALID_ARGUMENT = 1;
+  UNAVAILABLE = 2;
+  TIMEOUT = 3;
+  DEPENDENCY_FAILED = 4;
+  INTERNAL = 5;
+}
+message TaskError {
+  ErrorCode code = 1;
+  string message = 2;
+}
+message TaskResult {
+  TaskId task_id = 1;
+  TaskState state = 2;
+  oneof outcome {
+    Ack ack = 3;
+    Values values = 4;
+    TaskError error = 5;
+  }
+}
+message TaskStatus {
+  TaskId task_id = 1;
+  TaskState state = 2;
+  TaskError error = 3;
+}
+message Empty {}
+message ServerInfo {
+  uint32 width = 1;
+  double initial_value = 2;
+  uint64 max_keys_per_request = 3;
+  uint32 max_message_bytes = 4;
+  string update_rule = 5;
+}
+
+service ParameterServer {
+  rpc SubmitPush(PushRequest) returns (Ack);
+  rpc SubmitPull(PullRequest) returns (Ack);
+  rpc WaitTask(TaskId) returns (TaskResult);
+  rpc GetTaskStatus(TaskId) returns (TaskStatus);
+  rpc GetServerInfo(Empty) returns (ServerInfo);
+}
