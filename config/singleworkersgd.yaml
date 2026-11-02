@@ -7,18 +7,20 @@ model:
   value_width: 1   
   init: zeros   
   learning_rate: 0.01   
-  target: { dist: normal, mean: 0.0, std: 1.0 }  # hidden w* 
+  target: { dist: normal, mean: 5.0, std: 1.0 }  # hidden w* 
 workers: 
-  count: 1   
+  count: 1  
   iterations: 200   
   compute_ms: { dist: lognormal, median: 20, sigma: 0.4 }   
   stragglers: { fraction: 0.125, slowdown: 5 } 
 access:   
   mode: sparse                                   # sparse | dense   
+  # mode: dense
   keys_per_iter: 10   
   zipf_s: 1.1   
   scatter: true                                  # spread hot keys across servers   
-  # range_size: 100000                           # for dense mode
+  # scatter: false
+  range_size: 100000                           # for dense mode
 gradient: { type: target_diff, noise_std: 0.0 }  # target_diff | fixed 
 scenario:
   - { at: { time_s: 5 }, action: add_server }

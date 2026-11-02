@@ -22,6 +22,8 @@ class KeyRange:
     start: int
     end: int
 
+    def __len__(self) -> int:
+        return max(0, self.end - self.start)
 
 @dataclass(frozen=True)
 class TaskId:

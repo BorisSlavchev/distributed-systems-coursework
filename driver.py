@@ -1,53 +1,87 @@
+import time
+
 import yaml
 import pprint
 import uuid
 import threading
+from harness.observer import Observer
 from harness.workloadgenerator import WorkloadGenerator
 from harness.workeremulator import WorkerEmulator
-from parameter_server import Client
+from harness.observer import Observer
+from parameter_server import client
+from parameter_server import types
+
+# from parameter_server import Server
 
 class Driver:
     def __init__(self, config_path):
+        # Load config from yaml
         self.config = self.read_config(config_path)
+
+        # Intialize harness components
         self.wg = WorkloadGenerator(self.config)
-        self.workers = {}
-        self.servers = {}
-        self.num_servers = self.config["cluster"]["servers"]
-        self.replication = self.config["cluster"]["replication"]
+
+        # Generating target model for convergence check
+        self.w_star = self.wg.generate_target()
+        
+        # Config for senario       
         self.time_scenario = {}
         self.iteration_scenario ={}
         self.parse_scenarios()
+
+        self.workers = {}
+        self.servers = {}
+
+        # Config for server
+        self.num_servers = self.config["cluster"]["servers"]
+        self.replication = self.config["cluster"]["replication"]
+
+        # Config for workers
+        self.num_workers = self.config["workers"]["count"]
+
+        self.start_time = time.time_ns()
         self.initialize_servers()
+        # Configure observer 
+        self.observer = Observer(self.config, self.servers, self.w_star, self.start_time)
+        self.observer.start()
+        # self.schedule_time_scenario()
         self.initialize_workers()
-        self.schedule_time_scenario()
+
+        self.observer.stop()
+
+    
         
     def read_config(self, config_path):
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
         return config
 
-    def initialize_workers(self):
-        for i in range(self.config["workers"]["count"]):
-            self.add_worker(1)
-
     def initialize_servers(self):
-        for i in range(self.config["workers"]["count"]):
-            self.add_server(1)
+        for i in range(self.num_servers):
+            self.add_server(self.replication)
 
-    def add_worker(self, count):
-        ### TODO: connect to client
-        # client = Client() 
+    def add_server(self, replication):
+        next_id = self.servers.keys() and max(self.servers.keys()) + 1 or 0
+        ### TODO @Boris how to launch server?
+        self.servers[next_id] = None
+
+    def initialize_workers(self):
+        for i in range(self.num_workers):
+            self.add_worker()
+
+    def add_worker(self):
+        ### TODO: @Boris how to launch worker? also where is the struct for call options
+        
+        next_id = self.workers.keys() and max(self.workers.keys()) + 1 or 0
+        # client = Client.connect(address, worker_id=worker_id, opts=None) 
         client = None
-        self.workers[uuid.uuid4()] = WorkerEmulator(self.config, self.wg, client)
+        self.workers[next_id] = WorkerEmulator(self.config, self.wg, client, self.w_star)
+        self.workers[next_id].run()
 
     def kill_worker(self, target):
         ### TODO
         print("killing worker", target)
         
-    def add_server(self, count):
-        ### TODO 
-        self.servers[uuid.uuid4()] = None
-
     def kill_server(self, target):
         ### TODO
         print("killing server ", target)
